@@ -2,6 +2,7 @@
 Streamlit Futures Delivery Calculator
 Web application for calculating physical delivery from futures/options positions
 """
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,31 +12,11 @@ import tempfile
 import os
 import logging
 from typing import Dict, List, Optional
+import yfinance as yf
+from openpyxl import Workbook
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 
-# These might cause issues - add them one by one
-try:
-    import yfinance as yf
-except ImportError:
-    st.error("Please install yfinance: pip install yfinance")
-    st.stop()
-
-try:
-    from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-except ImportError:
-    st.error("Please install openpyxl: pip install openpyxl")
-    st.stop()
-#import msoffcrypto
-import sys
-sys.path.append('.')
-
-# Then add the imports:
-from input_parser import InputParser, Position
-from price_fetcher import PriceFetcher
-from excel_writer import ExcelWriter
-
-
-# Import your existing modules
+# Import your modules
 from input_parser import InputParser, Position
 from price_fetcher import PriceFetcher
 from excel_writer import ExcelWriter
@@ -55,9 +36,6 @@ st.set_page_config(
 # Custom CSS for better styling
 st.markdown("""
 <style>
-    .stTabs [data-baseweb="tab-list"] button [data-testid="stMarkdownContainer"] p {
-        font-size: 16px;
-    }
     .main-header {
         font-size: 2.5rem;
         color: #1f77b4;
@@ -84,20 +62,6 @@ st.markdown("""
         border-radius: 0.5rem;
         margin: 1rem 0;
         border: 1px solid #c3e6cb;
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-        border: 1px solid #ffeeba;
-    }
-    .error-box {
-        background-color: #f8d7da;
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin: 1rem 0;
-        border: 1px solid #f5c6cb;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -150,16 +114,16 @@ class StreamlitDeliveryApp:
                 help="CSV file with symbol to ticker mappings"
             )
             
+            mapping_file_path = None
             if not mapping_file:
                 st.info("ℹ️ Using default 'futures mapping.csv' if available")
                 if os.path.exists('futures mapping.csv'):
                     mapping_file_path = 'futures mapping.csv'
                 else:
                     st.error("⚠️ No mapping file found. Please upload one.")
-                    mapping_file_path = None
             else:
                 # Save uploaded mapping file temporarily
-                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv') as tmp_file:
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_file:
                     tmp_file.write(mapping_file.getvalue())
                     mapping_file_path = tmp_file.name
             
@@ -168,9 +132,6 @@ class StreamlitDeliveryApp:
             # Price fetching options
             st.subheader("💹 Price Options")
             fetch_prices = st.checkbox("Fetch prices from Yahoo Finance", value=True)
-            
-            if fetch_prices:
-                st.info("Prices will be fetched automatically when processing")
         
         # Main content area with tabs
         tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Process", "📊 Positions Review", 
@@ -207,16 +168,14 @@ class StreamlitDeliveryApp:
                 st.write("**File Details:**")
                 st.write(f"📁 Name: {uploaded_file.name}")
                 st.write(f"📏 Size: {uploaded_file.size:,} bytes")
-                st.write(f"📋 Type: {uploaded_file.type}")
                 st.markdown('</div>', unsafe_allow_html=True)
         
         if uploaded_file and mapping_file_path:
-            # Password input for Excel files
+            # Password input for Excel files (simplified - no msoffcrypto)
             password = None
             if uploaded_file.name.endswith(('.xlsx', '.xls')):
                 with st.expander("🔐 Password Protected File?"):
-                    password = st.text_input("Enter password (leave blank if not protected)", 
-                                           type="password")
+                    st.warning("Password-protected files are not currently supported in the web version. Please use an unprotected file.")
             
             # Process button
             if st.button("🚀 Process File", type="primary", use_container_width=True):
@@ -236,25 +195,10 @@ class StreamlitDeliveryApp:
         """Process the uploaded file"""
         try:
             # Save uploaded file temporarily
-            with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as tmp_file:
+            suffix = os.path.splitext(uploaded_file.name)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode='wb') as tmp_file:
                 tmp_file.write(uploaded_file.getvalue())
                 input_file_path = tmp_file.name
-            
-            # Handle password-protected Excel files
-            if password and uploaded_file.name.endswith(('.xlsx', '.xls')):
-                try:
-                    decrypted = io.BytesIO()
-                    with open(input_file_path, 'rb') as f:
-                        file = msoffcrypto.OfficeFile(f)
-                        file.load_key(password=password)
-                        file.decrypt(decrypted)
-                    
-                    # Save decrypted file
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-                        tmp_file.write(decrypted.getvalue())
-                        input_file_path = tmp_file.name
-                except Exception as e:
-                    return False, f"Failed to decrypt file: {str(e)}"
             
             # Parse positions
             parser = InputParser(mapping_file_path)
@@ -304,6 +248,12 @@ class StreamlitDeliveryApp:
                 
                 st.session_state.output_file = output_file
                 st.session_state.report_generated = True
+            
+            # Clean up temp file
+            try:
+                os.unlink(input_file_path)
+            except:
+                pass
             
             return True, f"Successfully processed {len(positions)} positions"
             
@@ -359,43 +309,9 @@ class StreamlitDeliveryApp:
         
         df = pd.DataFrame(df_data)
         
-        # Filters
-        with st.expander("🔍 Filters"):
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                selected_underlyings = st.multiselect(
-                    "Filter by Underlying",
-                    options=sorted(df['Underlying'].unique()),
-                    default=[]
-                )
-            
-            with col2:
-                selected_types = st.multiselect(
-                    "Filter by Type",
-                    options=sorted(df['Type'].unique()),
-                    default=[]
-                )
-            
-            with col3:
-                selected_expiries = st.multiselect(
-                    "Filter by Expiry",
-                    options=sorted(df['Expiry'].unique()),
-                    default=[]
-                )
-        
-        # Apply filters
-        filtered_df = df.copy()
-        if selected_underlyings:
-            filtered_df = filtered_df[filtered_df['Underlying'].isin(selected_underlyings)]
-        if selected_types:
-            filtered_df = filtered_df[filtered_df['Type'].isin(selected_types)]
-        if selected_expiries:
-            filtered_df = filtered_df[filtered_df['Expiry'].isin(selected_expiries)]
-        
         # Display table
         st.dataframe(
-            filtered_df,
+            df,
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -440,7 +356,7 @@ class StreamlitDeliveryApp:
             help="Analyze deliverables at different price levels"
         )
         
-        # Calculate deliverables for each underlying
+        # Calculate deliverables
         deliverables_data = []
         
         for underlying in sorted(grouped.keys()):
@@ -480,9 +396,8 @@ class StreamlitDeliveryApp:
                 'Net Deliverable (Lots)': total_deliverable
             })
         
-        # Display deliverables table
+        # Display table
         deliverables_df = pd.DataFrame(deliverables_data)
-        
         st.dataframe(
             deliverables_df,
             use_container_width=True,
@@ -493,32 +408,6 @@ class StreamlitDeliveryApp:
                 'Net Deliverable (Lots)': st.column_config.NumberColumn(format="%.0f"),
             }
         )
-        
-        # Summary metrics
-        st.subheader("📊 Summary Statistics")
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            total_long = sum(row['Net Deliverable (Lots)'] for row in deliverables_data 
-                           if row['Net Deliverable (Lots)'] > 0)
-            st.metric("Total Long Deliverable", f"{total_long:.0f} lots")
-        
-        with col2:
-            total_short = sum(row['Net Deliverable (Lots)'] for row in deliverables_data 
-                            if row['Net Deliverable (Lots)'] < 0)
-            st.metric("Total Short Deliverable", f"{total_short:.0f} lots")
-        
-        with col3:
-            net_deliverable = sum(row['Net Deliverable (Lots)'] for row in deliverables_data)
-            st.metric("Net Deliverable", f"{net_deliverable:.0f} lots")
-        
-        # Price warnings
-        missing_prices = [underlying for underlying in grouped.keys() 
-                         if underlying not in prices or prices[underlying] == 0]
-        
-        if missing_prices:
-            st.warning(f"⚠️ Missing prices for: {', '.join(missing_prices[:5])}" + 
-                      (f" and {len(missing_prices)-5} more" if len(missing_prices) > 5 else ""))
     
     def download_report_tab(self):
         """Download generated Excel report"""
@@ -551,29 +440,13 @@ class StreamlitDeliveryApp:
             
             # Report contents description
             st.subheader("📋 Report Contents")
-            
             st.info("""
-            The Excel report contains the following sheets:
-            
-            **Deliverable Sheets:**
-            - **Master_All_Expiries**: Consolidated view of all positions with deliverable calculations
-            - **Expiry_YYYY_MM_DD**: Individual sheets for each expiry date
-            - Includes sensitivity analysis columns (±% price changes)
-            
-            **IV (Intrinsic Value) Sheets:**
-            - **IV_All_Expiries**: Consolidated IV calculations in INR and USD
-            - **IV_Expiry_YYYY_MM_DD**: IV calculations by expiry date
-            
-            **Additional Sheets:**
-            - **All_Positions**: Complete list of all positions
-            - **Unmapped_Symbols**: Symbols that couldn't be mapped (if any)
-            
-            **Features:**
-            - Grouped by underlying with collapsible rows
-            - System prices from Yahoo Finance
-            - Override columns for manual price adjustments
-            - Bloomberg price formulas (=BDP)
-            - Dynamic deliverable calculations based on option type
+            The Excel report contains:
+            - Master sheets with all positions and deliverables
+            - Individual expiry-wise sheets
+            - IV (Intrinsic Value) calculations
+            - Sensitivity analysis columns
+            - Bloomberg price formulas
             """)
             
         except Exception as e:
