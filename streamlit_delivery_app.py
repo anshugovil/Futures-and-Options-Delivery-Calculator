@@ -2,7 +2,6 @@
 Streamlit Futures Delivery Calculator
 Web application for calculating physical delivery from futures/options positions
 """
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -12,10 +11,21 @@ import tempfile
 import os
 import logging
 from typing import Dict, List, Optional
-import yfinance as yf
-from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-import msoffcrypto
+
+# These might cause issues - add them one by one
+try:
+    import yfinance as yf
+except ImportError:
+    st.error("Please install yfinance: pip install yfinance")
+    st.stop()
+
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+except ImportError:
+    st.error("Please install openpyxl: pip install openpyxl")
+    st.stop()
+#import msoffcrypto
 import sys
 sys.path.append('.')
 
