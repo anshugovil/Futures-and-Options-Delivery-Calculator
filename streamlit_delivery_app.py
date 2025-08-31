@@ -16,6 +16,14 @@ import yfinance as yf
 from openpyxl import Workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 import msoffcrypto
+import sys
+sys.path.append('.')
+
+# Then add the imports:
+from input_parser import InputParser, Position
+from price_fetcher import PriceFetcher
+from excel_writer import ExcelWriter
+
 
 # Import your existing modules
 from input_parser import InputParser, Position
