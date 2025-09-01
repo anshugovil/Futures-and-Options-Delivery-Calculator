@@ -211,7 +211,7 @@ class StreamlitDeliveryApp:
             if st.button("🚀 Process File", type="primary", use_container_width=True):
                 with st.spinner("Processing position file..."):
                     success, message = self.process_file(
-                        uploaded_file, mapping_file_path, usdinr_rate, fetch_prices
+                        uploaded_file, mapping_file_path, None, usdinr_rate, fetch_prices
                     )
                     
                     if success:
