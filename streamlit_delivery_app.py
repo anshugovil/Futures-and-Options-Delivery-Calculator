@@ -1,6 +1,6 @@
 """
-Streamlit Futures Delivery Calculator
-Web application for calculating physical delivery from futures/options positions
+Streamlit Futures Delivery Calculator with Position Reconciliation
+Web application for calculating physical delivery and reconciling positions
 """
 
 import streamlit as st
@@ -20,6 +20,7 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 from input_parser import InputParser, Position
 from price_fetcher import PriceFetcher
 from excel_writer import ExcelWriter
+from recon_module import PositionReconciliation
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -63,6 +64,13 @@ st.markdown("""
         margin: 1rem 0;
         border: 1px solid #c3e6cb;
     }
+    .recon-box {
+        background-color: #e7f3ff;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        margin: 1rem 0;
+        border: 1px solid #b3d9ff;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -72,6 +80,7 @@ class StreamlitDeliveryApp:
     
     def __init__(self):
         self.initialize_session_state()
+        self.recon_module = PositionReconciliation()
     
     def initialize_session_state(self):
         """Initialize session state variables"""
@@ -85,6 +94,10 @@ class StreamlitDeliveryApp:
             st.session_state.report_generated = False
         if 'output_file' not in st.session_state:
             st.session_state.output_file = None
+        if 'recon_results' not in st.session_state:
+            st.session_state.recon_results = None
+        if 'recon_file' not in st.session_state:
+            st.session_state.recon_file = None
     
     def run(self):
         """Main application entry point"""
@@ -116,11 +129,15 @@ class StreamlitDeliveryApp:
             
             mapping_file_path = None
             if not mapping_file:
-                st.info("ℹ️ Using default 'futures mapping.csv' if available")
-                if os.path.exists('futures mapping.csv'):
+                st.info("ℹ️ Using default 'futures mapping.csv'")
+                # Try to find the mapping file
+                possible_paths = ['futures mapping.csv', 'futures_mapping.csv']
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        mapping_file_path = path
+                        break
+                if not mapping_file_path:
                     mapping_file_path = 'futures mapping.csv'
-                else:
-                    st.error("⚠️ No mapping file found. Please upload one.")
             else:
                 # Save uploaded mapping file temporarily
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.csv', mode='wb') as tmp_file:
@@ -132,22 +149,41 @@ class StreamlitDeliveryApp:
             # Price fetching options
             st.subheader("💹 Price Options")
             fetch_prices = st.checkbox("Fetch prices from Yahoo Finance", value=True)
+            
+            st.divider()
+            
+            # Reconciliation options
+            st.subheader("🔄 Reconciliation (Optional)")
+            st.info("Upload a recon file to compare positions")
+            recon_file = st.file_uploader(
+                "Upload reconciliation file",
+                type=['xlsx', 'xls', 'csv'],
+                help="File with Symbol and Position columns to reconcile against",
+                key="recon_uploader"
+            )
+            
+            if recon_file:
+                st.success(f"✅ Recon file loaded: {recon_file.name}")
+                st.session_state.recon_file = recon_file
         
         # Main content area with tabs
-        tab1, tab2, tab3, tab4 = st.tabs(["📤 Upload & Process", "📊 Positions Review", 
-                                          "💰 Deliverables Preview", "📥 Download Report"])
+        tabs = st.tabs(["📤 Upload & Process", "📊 Positions Review", 
+                        "💰 Deliverables Preview", "🔄 Reconciliation", "📥 Download Reports"])
         
-        with tab1:
+        with tabs[0]:
             self.upload_and_process_tab(mapping_file_path, usdinr_rate, fetch_prices)
         
-        with tab2:
+        with tabs[1]:
             self.positions_review_tab()
         
-        with tab3:
+        with tabs[2]:
             self.deliverables_preview_tab()
         
-        with tab4:
-            self.download_report_tab()
+        with tabs[3]:
+            self.reconciliation_tab()
+        
+        with tabs[4]:
+            self.download_reports_tab()
     
     def upload_and_process_tab(self, mapping_file_path, usdinr_rate, fetch_prices):
         """Handle file upload and processing"""
@@ -171,22 +207,20 @@ class StreamlitDeliveryApp:
                 st.markdown('</div>', unsafe_allow_html=True)
         
         if uploaded_file and mapping_file_path:
-            # Password input for Excel files (simplified - no msoffcrypto)
-            password = None
-            if uploaded_file.name.endswith(('.xlsx', '.xls')):
-                with st.expander("🔐 Password Protected File?"):
-                    st.warning("Password-protected files are not currently supported in the web version. Please use an unprotected file.")
-            
             # Process button
             if st.button("🚀 Process File", type="primary", use_container_width=True):
                 with st.spinner("Processing position file..."):
                     success, message = self.process_file(
-                        uploaded_file, mapping_file_path, password, 
-                        usdinr_rate, fetch_prices
+                        uploaded_file, mapping_file_path, usdinr_rate, fetch_prices
                     )
                     
                     if success:
                         st.success(f"✅ {message}")
+                        
+                        # If recon file is uploaded, perform reconciliation automatically
+                        if st.session_state.recon_file:
+                            self.perform_reconciliation()
+                        
                         st.balloons()
                     else:
                         st.error(f"❌ {message}")
@@ -260,6 +294,42 @@ class StreamlitDeliveryApp:
         except Exception as e:
             logger.error(f"Error processing file: {str(e)}")
             return False, f"Error processing file: {str(e)}"
+    
+    def perform_reconciliation(self):
+        """Perform reconciliation if recon file is uploaded"""
+        if not st.session_state.output_file or not st.session_state.recon_file:
+            return
+        
+        try:
+            # Save recon file temporarily
+            suffix = os.path.splitext(st.session_state.recon_file.name)[1]
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix, mode='wb') as tmp_file:
+                tmp_file.write(st.session_state.recon_file.getvalue())
+                recon_file_path = tmp_file.name
+            
+            # Generate recon output filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            recon_output_file = f"Position_Reconciliation_{timestamp}.xlsx"
+            
+            # Perform reconciliation
+            results = self.recon_module.perform_reconciliation(
+                st.session_state.output_file,
+                recon_file_path,
+                recon_output_file
+            )
+            
+            st.session_state.recon_results = results
+            st.session_state.recon_output_file = recon_output_file
+            
+            # Clean up temp file
+            try:
+                os.unlink(recon_file_path)
+            except:
+                pass
+                
+        except Exception as e:
+            logger.error(f"Error during reconciliation: {str(e)}")
+            st.error(f"Reconciliation failed: {str(e)}")
     
     def positions_review_tab(self):
         """Display parsed positions for review"""
@@ -409,48 +479,137 @@ class StreamlitDeliveryApp:
             }
         )
     
-    def download_report_tab(self):
-        """Download generated Excel report"""
-        st.markdown('<h2 class="sub-header">Download Report</h2>', unsafe_allow_html=True)
+    def reconciliation_tab(self):
+        """Display reconciliation results"""
+        st.markdown('<h2 class="sub-header">Position Reconciliation</h2>', unsafe_allow_html=True)
         
-        if not st.session_state.report_generated or not st.session_state.output_file:
-            st.info("📤 Please process a position file first to generate the report")
+        if not st.session_state.report_generated:
+            st.info("📤 Please process a position file first")
             return
         
-        # Report ready message
-        st.markdown('<div class="success-box">', unsafe_allow_html=True)
-        st.success("✅ **Report Generated Successfully!**")
-        st.write(f"**Filename:** {st.session_state.output_file}")
-        st.write(f"**Generated at:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        st.markdown('</div>', unsafe_allow_html=True)
+        if not st.session_state.recon_file:
+            st.markdown('<div class="recon-box">', unsafe_allow_html=True)
+            st.info("📁 Upload a reconciliation file in the sidebar to compare positions")
+            st.write("The recon file should have two columns:")
+            st.write("- Column A: Symbol (Bloomberg Ticker)")
+            st.write("- Column B: Position")
+            st.markdown('</div>', unsafe_allow_html=True)
+            return
         
-        # Download button
-        try:
-            with open(st.session_state.output_file, 'rb') as f:
-                excel_data = f.read()
+        if not st.session_state.recon_results:
+            if st.button("🔄 Run Reconciliation", type="primary"):
+                with st.spinner("Performing reconciliation..."):
+                    self.perform_reconciliation()
+        
+        if st.session_state.recon_results:
+            results = st.session_state.recon_results
+            summary = results['summary']
             
-            st.download_button(
-                label="📥 Download Excel Report",
-                data=excel_data,
-                file_name=st.session_state.output_file,
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                type="primary"
-            )
+            # Display summary metrics
+            st.subheader("📊 Reconciliation Summary")
             
-            # Report contents description
-            st.subheader("📋 Report Contents")
-            st.info("""
-            The Excel report contains:
-            - Master sheets with all positions and deliverables
-            - Individual expiry-wise sheets
-            - IV (Intrinsic Value) calculations
-            - Sensitivity analysis columns
-            - Bloomberg price formulas
-            """)
+            col1, col2, col3, col4 = st.columns(4)
             
-        except Exception as e:
-            st.error(f"Error reading report file: {str(e)}")
+            with col1:
+                st.metric("Matched Positions", summary['matched_count'])
+            
+            with col2:
+                st.metric("Position Mismatches", summary['mismatch_count'])
+            
+            with col3:
+                st.metric("Missing in Recon", summary['missing_in_recon_count'])
+            
+            with col4:
+                st.metric("Missing in Delivery", summary['missing_in_delivery_count'])
+            
+            # Show total discrepancies prominently
+            if summary['total_discrepancies'] > 0:
+                st.error(f"⚠️ Total Discrepancies: {summary['total_discrepancies']}")
+            else:
+                st.success("✅ All positions match perfectly!")
+            
+            # Display detailed discrepancies
+            if results['position_mismatches']:
+                st.subheader("🔍 Position Mismatches")
+                mismatch_df = pd.DataFrame(results['position_mismatches'])
+                st.dataframe(
+                    mismatch_df,
+                    use_container_width=True,
+                    hide_index=True,
+                    column_config={
+                        'Delivery_Position': st.column_config.NumberColumn(format="%.2f"),
+                        'Recon_Position': st.column_config.NumberColumn(format="%.2f"),
+                        'Difference': st.column_config.NumberColumn(format="%.2f"),
+                    }
+                )
+            
+            if results['missing_in_recon']:
+                st.subheader("📝 Missing in Recon File")
+                missing_recon_df = pd.DataFrame(results['missing_in_recon'])
+                st.dataframe(missing_recon_df, use_container_width=True, hide_index=True)
+            
+            if results['missing_in_delivery']:
+                st.subheader("📝 Missing in Delivery Output")
+                missing_delivery_df = pd.DataFrame(results['missing_in_delivery'])
+                st.dataframe(missing_delivery_df, use_container_width=True, hide_index=True)
+    
+    def download_reports_tab(self):
+        """Download generated reports"""
+        st.markdown('<h2 class="sub-header">Download Reports</h2>', unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📊 Delivery Report")
+            
+            if not st.session_state.report_generated or not st.session_state.output_file:
+                st.info("📤 Please process a position file first")
+            else:
+                st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                st.success("✅ **Delivery Report Ready!**")
+                st.write(f"**Filename:** {st.session_state.output_file}")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                try:
+                    with open(st.session_state.output_file, 'rb') as f:
+                        excel_data = f.read()
+                    
+                    st.download_button(
+                        label="📥 Download Delivery Report",
+                        data=excel_data,
+                        file_name=st.session_state.output_file,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                except Exception as e:
+                    st.error(f"Error reading report: {str(e)}")
+        
+        with col2:
+            st.subheader("🔄 Reconciliation Report")
+            
+            if not hasattr(st.session_state, 'recon_output_file'):
+                st.info("📁 Upload a recon file and run reconciliation first")
+            else:
+                st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                st.success("✅ **Reconciliation Report Ready!**")
+                st.write(f"**Filename:** {st.session_state.recon_output_file}")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                try:
+                    with open(st.session_state.recon_output_file, 'rb') as f:
+                        recon_data = f.read()
+                    
+                    st.download_button(
+                        label="📥 Download Reconciliation Report",
+                        data=recon_data,
+                        file_name=st.session_state.recon_output_file,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        use_container_width=True,
+                        type="primary"
+                    )
+                except Exception as e:
+                    st.error(f"Error reading recon report: {str(e)}")
 
 
 def main():
