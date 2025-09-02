@@ -352,13 +352,10 @@ class InputParser:
         positions = []
         valid_rows = 0
         
-        # MS format uses column 22 (index 21) for position
-        position_column = 21
-        
         for idx in range(len(df)):
             try:
                 row = df.iloc[idx]
-                if len(row) < 22:  # Need at least 22 columns for MS format
+                if len(row) < 21:  # Need at least 21 columns for col 20 and 21
                     continue
                 
                 contract_id = str(row[0]).strip() if pd.notna(row[0]) else ""
@@ -371,21 +368,26 @@ class InputParser:
                 if any(keyword in contract_id.lower() for keyword in ['total', 'summary', 'net', 'mtm', 'payable', 'receivable']):
                     continue
                 
-                # Get position value from column 22 (index 21)
-                position_lots = 0
-                if position_column < len(row):
-                    try:
-                        val = float(row[position_column]) if pd.notna(row[position_column]) else 0
-                        if val != 0:
-                            position_lots = val
-                    except (ValueError, TypeError):
-                        continue
+                # Calculate position as column 20 - column 21 (indices 19 - 20)
+                try:
+                    col20_val = float(row[19]) if pd.notna(row[19]) else 0.0
+                except (ValueError, TypeError):
+                    col20_val = 0.0
+                
+                try:
+                    col21_val = float(row[20]) if pd.notna(row[20]) else 0.0
+                except (ValueError, TypeError):
+                    col21_val = 0.0
+                
+                # Position = Column 20 - Column 21
+                position_lots = col20_val - col21_val
                 
                 if position_lots == 0:
                     continue
                 
                 parsed = self._parse_contract_id(contract_id)
                 if parsed:
+                    # MS format always passes None for lot_size to use mapping file
                     position = self._create_position(
                         parsed['symbol'], parsed['expiry'], parsed['strike'],
                         parsed['inst_type'], position_lots, None, parsed['series']
@@ -516,6 +518,16 @@ class InputParser:
             mapping['ticker'], expiry, security_type, strike
         )
         
+        # Handle lot_size: Use provided value, or mapping value, or 1 if both are None/blank
+        if lot_size is not None:
+            final_lot_size = lot_size
+        else:
+            # For MS format (lot_size is None), use mapping file value
+            final_lot_size = mapping.get('lot_size', 1)
+            # If mapping has no lot_size or it's 0, use 1 as default
+            if not final_lot_size or final_lot_size == 0:
+                final_lot_size = 1
+        
         return Position(
             underlying_ticker=mapping['underlying'],
             bloomberg_ticker=bloomberg_ticker,
@@ -524,20 +536,38 @@ class InputParser:
             position_lots=position_lots,
             security_type=security_type,
             strike_price=strike,
-            lot_size=lot_size or mapping.get('lot_size', 1)
+            lot_size=final_lot_size
         )
     
     def _generate_bloomberg_ticker(self, ticker: str, expiry: datetime,
                                   security_type: str, strike: float) -> str:
         """Generate Bloomberg ticker"""
+        # Check if this is an index ticker (ends with Index or contains NIFTY)
+        is_index = 'NIFTY' in ticker.upper() or ticker.upper().endswith('INDEX')
+        
         if security_type == 'Futures':
             month_code = MONTH_CODE.get(expiry.month, "")
             year_code = str(expiry.year)[-1]
-            return f"{ticker}={month_code}{year_code} IS Equity"
+            
+            if is_index:
+                # Index futures format: NF H5 Index (no = sign)
+                return f"{ticker} {month_code}{year_code} Index"
+            else:
+                # Stock futures format: RIL=H5 IS Equity
+                return f"{ticker}={month_code}{year_code} IS Equity"
         else:
             date_str = expiry.strftime('%m/%d/%y')
             strike_str = str(int(strike)) if strike == int(strike) else str(strike)
-            if security_type == 'Call':
-                return f"{ticker} IS {date_str} C{strike_str} Equity"
+            
+            if is_index:
+                # Index options format: NF 03/27/25 C21000 Index
+                if security_type == 'Call':
+                    return f"{ticker} {date_str} C{strike_str} Index"
+                else:
+                    return f"{ticker} {date_str} P{strike_str} Index"
             else:
-                return f"{ticker} IS {date_str} P{strike_str} Equity"
+                # Stock options format: RIL IS 03/27/25 C1200 Equity
+                if security_type == 'Call':
+                    return f"{ticker} IS {date_str} C{strike_str} Equity"
+                else:
+                    return f"{ticker} IS {date_str} P{strike_str} Equity"
