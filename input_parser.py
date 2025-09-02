@@ -239,16 +239,34 @@ class InputParser:
         for idx in range(data_start, len(df)):
             try:
                 row = df.iloc[idx]
-                if len(row) < 16 or pd.isna(row.iloc[1]):
+                if len(row) < 15:  # Changed from 16 to 15 - minimum columns needed
                     continue
                 
-                symbol = str(row.iloc[1]).strip()
+                symbol = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else None
+                if not symbol:
+                    continue
+                
                 series = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else 'EQ'
                 expiry = pd.to_datetime(row.iloc[3]) if pd.notna(row.iloc[3]) else datetime.now() + timedelta(30)
                 strike = float(row.iloc[4]) if pd.notna(row.iloc[4]) else 0.0
                 option_type = str(row.iloc[5]).strip() if pd.notna(row.iloc[5]) else ''
                 lot_size = int(row.iloc[6]) if pd.notna(row.iloc[6]) else 1
-                position_lots = float(row.iloc[15]) if pd.notna(row.iloc[15]) else 0.0
+                
+                # Modified position calculation - now uses difference of columns 13 and 14
+                try:
+                    # Column 13 (index 13) - Carry Forward Position Buy
+                    col13_val = float(row.iloc[13]) if pd.notna(row.iloc[13]) else 0.0
+                except (ValueError, TypeError):
+                    col13_val = 0.0
+                
+                try:
+                    # Column 14 (index 14) - Carry Forward Position Sell  
+                    col14_val = float(row.iloc[14]) if pd.notna(row.iloc[14]) else 0.0
+                except (ValueError, TypeError):
+                    col14_val = 0.0
+                
+                # Position = Buy - Sell (columns 13 - 14)
+                position_lots = col13_val - col14_val
                 
                 if position_lots == 0:
                     continue
@@ -334,13 +352,13 @@ class InputParser:
         positions = []
         valid_rows = 0
         
-        # MS format might have positions in different columns
-        position_columns = [21, 20, 19, 11, 10]  # Try different possible columns
+        # MS format uses column 22 (index 21) for position
+        position_column = 21
         
         for idx in range(len(df)):
             try:
                 row = df.iloc[idx]
-                if len(row) < 22:
+                if len(row) < 22:  # Need at least 22 columns for MS format
                     continue
                 
                 contract_id = str(row[0]).strip() if pd.notna(row[0]) else ""
@@ -353,17 +371,15 @@ class InputParser:
                 if any(keyword in contract_id.lower() for keyword in ['total', 'summary', 'net', 'mtm', 'payable', 'receivable']):
                     continue
                 
-                # Try to find position value in different columns
+                # Get position value from column 22 (index 21)
                 position_lots = 0
-                for col_idx in position_columns:
-                    if col_idx < len(row):
-                        try:
-                            val = float(row[col_idx]) if pd.notna(row[col_idx]) else 0
-                            if val != 0:
-                                position_lots = val
-                                break
-                        except (ValueError, TypeError):
-                            continue
+                if position_column < len(row):
+                    try:
+                        val = float(row[position_column]) if pd.notna(row[position_column]) else 0
+                        if val != 0:
+                            position_lots = val
+                    except (ValueError, TypeError):
+                        continue
                 
                 if position_lots == 0:
                     continue
@@ -389,7 +405,7 @@ class InputParser:
     def _find_data_start_bod(self, df: pd.DataFrame) -> int:
         """Find where data starts in BOD format"""
         for i in range(min(100, len(df))):
-            if len(df.iloc[i]) < 16:
+            if len(df.iloc[i]) < 15:  # Changed from 16 to 15
                 continue
             
             col5_val = str(df.iloc[i, 4]).strip() if pd.notna(df.iloc[i, 4]) else ""
@@ -399,8 +415,10 @@ class InputParser:
             try:
                 if pd.notna(df.iloc[i, 4]):
                     float(df.iloc[i, 4])
-                if pd.notna(df.iloc[i, 15]):
-                    float(df.iloc[i, 15])
+                # Check columns 13 and 14 instead of column 15
+                if pd.notna(df.iloc[i, 13]) or pd.notna(df.iloc[i, 14]):
+                    float(df.iloc[i, 13] if pd.notna(df.iloc[i, 13]) else 0)
+                    float(df.iloc[i, 14] if pd.notna(df.iloc[i, 14]) else 0)
                 return i
             except:
                 continue
