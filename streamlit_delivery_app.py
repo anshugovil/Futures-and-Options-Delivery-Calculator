@@ -99,6 +99,8 @@ class StreamlitDeliveryApp:
             st.session_state.recon_results = None
         if 'recon_file' not in st.session_state:
             st.session_state.recon_file = None
+        if 'file_prefix' not in st.session_state:
+            st.session_state.file_prefix = 'DELIVERY'
     
     def run(self):
         """Main application entry point"""
@@ -341,9 +343,10 @@ class StreamlitDeliveryApp:
         Combine delivery report and reconciliation report into a single Excel file
         """
         try:
-            # Generate output filename
+            # Generate output filename with appropriate prefix
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            consolidated_file = f"Consolidated_Delivery_Recon_{timestamp}.xlsx"
+            prefix = getattr(st.session_state, 'file_prefix', 'DELIVERY')
+            consolidated_file = f"{prefix}_CONSOLIDATED_{timestamp}.xlsx"
             
             # Load the delivery report as base
             wb_delivery = load_workbook(delivery_file)
