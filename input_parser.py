@@ -542,25 +542,28 @@ class InputParser:
     def _generate_bloomberg_ticker(self, ticker: str, expiry: datetime,
                                   security_type: str, strike: float) -> str:
         """Generate Bloomberg ticker"""
-        # Check if this is an index ticker (ends with Index or contains NIFTY)
-        is_index = 'NIFTY' in ticker.upper() or ticker.upper().endswith('INDEX')
+        # Check if this is an index ticker (ends with Index or contains specific index names)
+        ticker_upper = ticker.upper()
+        is_index = (ticker_upper in ['NZ', 'NBZ', 'NIFTY', 'BANKNIFTY', 'NF', 'NBF', 'FNF', 'FINNIFTY', 'MCN', 'MIDCPNIFTY'] 
+                   or 'NIFTY' in ticker_upper 
+                   or ticker_upper.endswith('INDEX'))
         
         if security_type == 'Futures':
             month_code = MONTH_CODE.get(expiry.month, "")
             year_code = str(expiry.year)[-1]
             
             if is_index:
-                # Index futures format: NF H5 Index (no = sign)
+                # Index futures format: NZ H5 Index (no = sign, space between ticker and month/year)
                 return f"{ticker} {month_code}{year_code} Index"
             else:
-                # Stock futures format: RIL=H5 IS Equity
+                # Stock futures format: RIL=H5 IS Equity (= sign, no space)
                 return f"{ticker}={month_code}{year_code} IS Equity"
         else:
             date_str = expiry.strftime('%m/%d/%y')
             strike_str = str(int(strike)) if strike == int(strike) else str(strike)
             
             if is_index:
-                # Index options format: NF 03/27/25 C21000 Index
+                # Index options format: NZ 03/27/25 C21000 Index
                 if security_type == 'Call':
                     return f"{ticker} {date_str} C{strike_str} Index"
                 else:
