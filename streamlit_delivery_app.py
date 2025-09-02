@@ -783,7 +783,7 @@ class StreamlitDeliveryApp:
                                 file_name=consolidated_file,
                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                 use_container_width=True,
-                                type="success"
+                                type="secondary"
                             )
                             
                             # Clean up the temporary consolidated file
