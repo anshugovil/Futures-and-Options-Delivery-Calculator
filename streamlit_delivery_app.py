@@ -270,13 +270,16 @@ class StreamlitDeliveryApp:
                 format_type = getattr(parser, 'format_type', 'UNKNOWN')
                 
                 if format_type in ['BOD', 'CONTRACT']:
-                    prefix = "GS_AURIGIN_DELIVERY"
+                    prefix = "GS_AURIGIN"
+                    st.session_state.file_prefix = prefix
                 elif format_type == 'MS':
-                    prefix = "MS_WAFRA_DELIVERY"
+                    prefix = "MS_WAFRA"
+                    st.session_state.file_prefix = prefix
                 else:
-                    prefix = "DELIVERY_REPORT"
+                    prefix = "DELIVERY"
+                    st.session_state.file_prefix = prefix
                 
-                output_file = f"{prefix}_{timestamp}.xlsx"
+                output_file = f"{prefix}_DELIVERY_{timestamp}.xlsx"
                 
                 writer = ExcelWriter(output_file, usdinr_rate)
                 writer.create_report(positions, st.session_state.prices, parser.unmapped_symbols)
@@ -308,9 +311,10 @@ class StreamlitDeliveryApp:
                 tmp_file.write(st.session_state.recon_file.getvalue())
                 recon_file_path = tmp_file.name
             
-            # Generate recon output filename
+            # Generate recon output filename with appropriate prefix
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            recon_output_file = f"Position_Reconciliation_{timestamp}.xlsx"
+            prefix = getattr(st.session_state, 'file_prefix', 'DELIVERY')
+            recon_output_file = f"{prefix}_RECONCILIATION_{timestamp}.xlsx"
             
             # Perform reconciliation
             results = self.recon_module.perform_reconciliation(
