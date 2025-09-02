@@ -553,8 +553,8 @@ class InputParser:
             year_code = str(expiry.year)[-1]
             
             if is_index:
-                # Index futures format: NZ H5 Index (no = sign, space between ticker and month/year)
-                return f"{ticker} {month_code}{year_code} Index"
+                # Index futures format: NZU5 Index (no = sign, no space)
+                return f"{ticker}{month_code}{year_code} Index"
             else:
                 # Stock futures format: RIL=H5 IS Equity (= sign, no space)
                 return f"{ticker}={month_code}{year_code} IS Equity"
