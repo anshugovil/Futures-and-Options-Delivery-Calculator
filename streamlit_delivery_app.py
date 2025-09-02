@@ -13,8 +13,9 @@ import os
 import logging
 from typing import Dict, List, Optional
 import yfinance as yf
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from copy import copy
 
 # Import your modules
 from input_parser import InputParser, Position
@@ -331,6 +332,146 @@ class StreamlitDeliveryApp:
             logger.error(f"Error during reconciliation: {str(e)}")
             st.error(f"Reconciliation failed: {str(e)}")
     
+    def generate_consolidated_report(self, delivery_file: str, recon_file: str) -> str:
+        """
+        Combine delivery report and reconciliation report into a single Excel file
+        """
+        try:
+            # Generate output filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            consolidated_file = f"Consolidated_Delivery_Recon_{timestamp}.xlsx"
+            
+            # Load the delivery report as base
+            wb_delivery = load_workbook(delivery_file)
+            
+            # Load the reconciliation report
+            wb_recon = load_workbook(recon_file)
+            
+            # Copy all sheets from reconciliation report to delivery report
+            # Prefix recon sheets with "RECON_" to distinguish them
+            for sheet_name in wb_recon.sheetnames:
+                source_sheet = wb_recon[sheet_name]
+                
+                # Create new sheet name with prefix
+                if sheet_name == "Summary":
+                    new_sheet_name = "RECON_Summary"
+                else:
+                    new_sheet_name = f"RECON_{sheet_name}" if not sheet_name.startswith("RECON_") else sheet_name
+                
+                # Ensure sheet name doesn't exceed Excel's 31 character limit
+                if len(new_sheet_name) > 31:
+                    new_sheet_name = new_sheet_name[:31]
+                
+                # Create new sheet in delivery workbook
+                target_sheet = wb_delivery.create_sheet(new_sheet_name)
+                
+                # Copy all cells
+                for row in source_sheet.iter_rows():
+                    for cell in row:
+                        target_cell = target_sheet.cell(
+                            row=cell.row, 
+                            column=cell.column, 
+                            value=cell.value
+                        )
+                        
+                        # Copy cell formatting
+                        if cell.has_style:
+                            target_cell.font = copy(cell.font)
+                            target_cell.fill = copy(cell.fill)
+                            target_cell.border = copy(cell.border)
+                            target_cell.alignment = copy(cell.alignment)
+                            target_cell.number_format = cell.number_format
+                
+                # Copy column widths
+                for col_letter in source_sheet.column_dimensions:
+                    target_sheet.column_dimensions[col_letter].width = source_sheet.column_dimensions[col_letter].width
+                
+                # Copy row heights
+                for row_num in source_sheet.row_dimensions:
+                    target_sheet.row_dimensions[row_num].height = source_sheet.row_dimensions[row_num].height
+            
+            # Add a consolidated summary sheet at the beginning
+            summary_sheet = wb_delivery.create_sheet("CONSOLIDATED_SUMMARY", 0)
+            
+            # Add headers and summary information
+            summary_sheet.cell(row=1, column=1, value="CONSOLIDATED DELIVERY & RECONCILIATION REPORT")
+            summary_sheet.cell(row=1, column=1).font = Font(bold=True, size=14)
+            
+            summary_sheet.cell(row=3, column=1, value="Report Generated:")
+            summary_sheet.cell(row=3, column=2, value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            
+            summary_sheet.cell(row=5, column=1, value="CONTENTS:")
+            summary_sheet.cell(row=5, column=1).font = Font(bold=True, size=12)
+            
+            # List delivery sheets
+            summary_sheet.cell(row=7, column=1, value="DELIVERY REPORT SHEETS:")
+            summary_sheet.cell(row=7, column=1).font = Font(bold=True)
+            
+            row = 8
+            for sheet_name in wb_delivery.sheetnames:
+                if not sheet_name.startswith("RECON_") and sheet_name != "CONSOLIDATED_SUMMARY":
+                    summary_sheet.cell(row=row, column=2, value=f"• {sheet_name}")
+                    row += 1
+            
+            # List reconciliation sheets
+            row += 1
+            summary_sheet.cell(row=row, column=1, value="RECONCILIATION REPORT SHEETS:")
+            summary_sheet.cell(row=row, column=1).font = Font(bold=True)
+            row += 1
+            
+            for sheet_name in wb_delivery.sheetnames:
+                if sheet_name.startswith("RECON_"):
+                    display_name = sheet_name.replace("RECON_", "")
+                    summary_sheet.cell(row=row, column=2, value=f"• {display_name}")
+                    row += 1
+            
+            # Add reconciliation results if available
+            if hasattr(st.session_state, 'recon_results') and st.session_state.recon_results:
+                results = st.session_state.recon_results
+                summary = results['summary']
+                
+                row += 2
+                summary_sheet.cell(row=row, column=1, value="RECONCILIATION SUMMARY:")
+                summary_sheet.cell(row=row, column=1).font = Font(bold=True, size=12)
+                
+                row += 1
+                summary_sheet.cell(row=row, column=1, value="Total Discrepancies:")
+                summary_sheet.cell(row=row, column=2, value=summary['total_discrepancies'])
+                if summary['total_discrepancies'] > 0:
+                    summary_sheet.cell(row=row, column=2).fill = PatternFill(
+                        start_color="FFCCCC", end_color="FFCCCC", fill_type="solid"
+                    )
+                else:
+                    summary_sheet.cell(row=row, column=2).fill = PatternFill(
+                        start_color="CCFFCC", end_color="CCFFCC", fill_type="solid"
+                    )
+                
+                row += 1
+                summary_sheet.cell(row=row, column=1, value="Position Mismatches:")
+                summary_sheet.cell(row=row, column=2, value=summary['mismatch_count'])
+                
+                row += 1
+                summary_sheet.cell(row=row, column=1, value="Missing in Recon:")
+                summary_sheet.cell(row=row, column=2, value=summary['missing_in_recon_count'])
+                
+                row += 1
+                summary_sheet.cell(row=row, column=1, value="Missing in Delivery:")
+                summary_sheet.cell(row=row, column=2, value=summary['missing_in_delivery_count'])
+            
+            # Set column widths for summary sheet
+            summary_sheet.column_dimensions['A'].width = 35
+            summary_sheet.column_dimensions['B'].width = 40
+            
+            # Save consolidated workbook
+            wb_delivery.save(consolidated_file)
+            
+            logger.info(f"Generated consolidated report: {consolidated_file}")
+            return consolidated_file
+            
+        except Exception as e:
+            logger.error(f"Error creating consolidated report: {e}")
+            raise
+    
     def positions_review_tab(self):
         """Display parsed positions for review"""
         st.markdown('<h2 class="sub-header">Position Summary</h2>', unsafe_allow_html=True)
@@ -489,7 +630,7 @@ class StreamlitDeliveryApp:
         
         if not st.session_state.recon_file:
             st.markdown('<div class="recon-box">', unsafe_allow_html=True)
-            st.info("📁 Upload a reconciliation file in the sidebar to compare positions")
+            st.info("📋 Upload a reconciliation file in the sidebar to compare positions")
             st.write("The recon file should have two columns:")
             st.write("- Column A: Symbol (Bloomberg Ticker)")
             st.write("- Column B: Position")
@@ -544,12 +685,12 @@ class StreamlitDeliveryApp:
                 )
             
             if results['missing_in_recon']:
-                st.subheader("📝 Missing in Recon File")
+                st.subheader("📋 Missing in Recon File")
                 missing_recon_df = pd.DataFrame(results['missing_in_recon'])
                 st.dataframe(missing_recon_df, use_container_width=True, hide_index=True)
             
             if results['missing_in_delivery']:
-                st.subheader("📝 Missing in Delivery Output")
+                st.subheader("📋 Missing in Delivery Output")
                 missing_delivery_df = pd.DataFrame(results['missing_in_delivery'])
                 st.dataframe(missing_delivery_df, use_container_width=True, hide_index=True)
     
@@ -557,7 +698,7 @@ class StreamlitDeliveryApp:
         """Download generated reports"""
         st.markdown('<h2 class="sub-header">Download Reports</h2>', unsafe_allow_html=True)
         
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         
         with col1:
             st.subheader("📊 Delivery Report")
@@ -586,10 +727,10 @@ class StreamlitDeliveryApp:
                     st.error(f"Error reading report: {str(e)}")
         
         with col2:
-            st.subheader("🔄 Reconciliation Report")
+            st.subheader("📄 Reconciliation Report")
             
             if not hasattr(st.session_state, 'recon_output_file'):
-                st.info("📁 Upload a recon file and run reconciliation first")
+                st.info("📋 Upload a recon file and run reconciliation first")
             else:
                 st.markdown('<div class="success-box">', unsafe_allow_html=True)
                 st.success("✅ **Reconciliation Report Ready!**")
@@ -610,6 +751,49 @@ class StreamlitDeliveryApp:
                     )
                 except Exception as e:
                     st.error(f"Error reading recon report: {str(e)}")
+        
+        with col3:
+            st.subheader("📦 Consolidated Report")
+            
+            # Check if both reports are available
+            if (not st.session_state.report_generated or not st.session_state.output_file or 
+                not hasattr(st.session_state, 'recon_output_file')):
+                st.info("📋 Generate both reports first")
+            else:
+                st.markdown('<div class="success-box">', unsafe_allow_html=True)
+                st.success("✅ **Both Reports Available!**")
+                st.write("Combine delivery and reconciliation reports into a single file")
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                if st.button("🔄 Generate Consolidated Report", use_container_width=True, type="primary"):
+                    try:
+                        with st.spinner("Creating consolidated report..."):
+                            consolidated_file = self.generate_consolidated_report(
+                                st.session_state.output_file,
+                                st.session_state.recon_output_file
+                            )
+                            
+                            # Read the consolidated file for download
+                            with open(consolidated_file, 'rb') as f:
+                                consolidated_data = f.read()
+                            
+                            st.download_button(
+                                label="📥 Download Consolidated Report",
+                                data=consolidated_data,
+                                file_name=consolidated_file,
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                use_container_width=True,
+                                type="success"
+                            )
+                            
+                            # Clean up the temporary consolidated file
+                            try:
+                                os.unlink(consolidated_file)
+                            except:
+                                pass
+                                
+                    except Exception as e:
+                        st.error(f"Error creating consolidated report: {str(e)}")
 
 
 def main():
