@@ -59,7 +59,6 @@ class InputParser:
         self.symbol_mappings = self._load_mappings()
         self.positions = []
         self.unmapped_symbols = []
-        self.format_type = None
     
     def _load_mappings(self) -> Dict:
         """Load symbol mappings from CSV"""
