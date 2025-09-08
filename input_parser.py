@@ -541,29 +541,59 @@ class InputParser:
     
     def _generate_bloomberg_ticker(self, ticker: str, symbol: str, expiry: datetime,
                                   security_type: str, strike: float) -> str:
-        """Generate Bloomberg ticker with hardcoded MIDCPNIFTY mappings"""
+        """Generate Bloomberg ticker with special handling for indices"""
         
-        # Check if this is MIDCPNIFTY based on symbol or ticker
+        # Check symbol and ticker
         symbol_upper = symbol.upper() if symbol else ''
         ticker_upper = ticker.upper()
         
-        # Detect if this is MIDCPNIFTY
+        # Detect NIFTY
+        is_nifty = (symbol_upper == 'NIFTY' or 
+                   ticker_upper in ['NZ', 'NIFTY'] or
+                   (symbol_upper == 'NIFTY' and ticker_upper == 'NZ'))
+        
+        # Detect BANKNIFTY
+        is_banknifty = (symbol_upper == 'BANKNIFTY' or 
+                       ticker_upper in ['NBZ', 'BANKNIFTY', 'NBF'] or
+                       'BANKNIFTY' in symbol_upper)
+        
+        # Detect FINNIFTY
+        is_finnifty = (symbol_upper == 'FINNIFTY' or 
+                      ticker_upper in ['FNF', 'FINNIFTY'] or
+                      'FINNIFTY' in symbol_upper)
+        
+        # Detect MIDCPNIFTY
         is_midcap = (symbol_upper == 'MIDCPNIFTY' or 
                     ticker_upper in ['MCN', 'MIDCPNIFTY', 'RNS', 'NMIDSELP'] or
                     'MIDCP' in symbol_upper or 'MIDCP' in ticker_upper)
         
-        # Override ticker for MIDCPNIFTY based on security type
-        if is_midcap:
+        # Special handling for each index
+        if is_nifty:
+            if security_type == 'Futures':
+                ticker = 'NZ'  # Use NZ for NIFTY futures
+            else:  # Call or Put
+                ticker = 'NIFTY'  # Use NIFTY for NIFTY options
+        elif is_banknifty:
+            if security_type == 'Futures':
+                ticker = 'NBZ'  # Use NBZ for BANKNIFTY futures
+            else:  # Call or Put
+                ticker = 'BANKNIFTY'  # Use BANKNIFTY for BANKNIFTY options
+        elif is_finnifty:
+            if security_type == 'Futures':
+                ticker = 'FNF'  # Use FNF for FINNIFTY futures
+            else:  # Call or Put
+                ticker = 'FINNIFTY'  # Use FINNIFTY for FINNIFTY options
+        elif is_midcap:
             if security_type == 'Futures':
                 ticker = 'RNS'  # Use RNS for MIDCPNIFTY futures
             else:  # Call or Put
                 ticker = 'NMIDSELP'  # Use NMIDSELP for MIDCPNIFTY options
         
-        # Check if this is an index ticker
-        is_index = (ticker_upper in ['NZ', 'NBZ', 'NIFTY', 'BANKNIFTY', 'NF', 'NBF', 'FNF', 'FINNIFTY', 'RNS', 'NMIDSELP'] 
-                   or 'NIFTY' in ticker_upper 
-                   or ticker_upper.endswith('INDEX')
-                   or is_midcap)
+        # Check if this is an index
+        is_index = (is_nifty or is_banknifty or is_finnifty or is_midcap or
+                   ticker_upper in ['NZ', 'NBZ', 'FNF', 'RNS', 'NIFTY', 'BANKNIFTY', 'FINNIFTY', 'NMIDSELP'] or
+                   ticker_upper.endswith('INDEX') or
+                   'NIFTY' in ticker_upper)
         
         if security_type == 'Futures':
             month_code = MONTH_CODE.get(expiry.month, "")
@@ -580,7 +610,7 @@ class InputParser:
             strike_str = str(int(strike)) if strike == int(strike) else str(strike)
             
             if is_index:
-                # Index options format: NZ 03/27/25 C21000 Index
+                # Index options format: NIFTY 03/27/25 C21000 Index
                 if security_type == 'Call':
                     return f"{ticker} {date_str} C{strike_str} Index"
                 else:
