@@ -231,6 +231,28 @@ class InputParser:
         
         return 'UNKNOWN'
     
+    def _find_data_start_bod(self, df: pd.DataFrame) -> int:
+        """Find where data starts in BOD format"""
+        for i in range(min(100, len(df))):
+            if len(df.iloc[i]) < 15:  # Changed from 16 to 15
+                continue
+            
+            col5_val = str(df.iloc[i, 4]).strip() if pd.notna(df.iloc[i, 4]) else ""
+            if any(word in col5_val.lower() for word in ['strike', 'price', 'column', 'header']):
+                continue
+            
+            try:
+                if pd.notna(df.iloc[i, 4]):
+                    float(df.iloc[i, 4])
+                # Check columns 13 and 14 instead of column 15
+                if pd.notna(df.iloc[i, 13]) or pd.notna(df.iloc[i, 14]):
+                    float(df.iloc[i, 13] if pd.notna(df.iloc[i, 13]) else 0)
+                    float(df.iloc[i, 14] if pd.notna(df.iloc[i, 14]) else 0)
+                return i
+            except:
+                continue
+        return 0
+    
     def _parse_bod(self, df: pd.DataFrame) -> List[Position]:
         """Parse BOD format"""
         positions = []
@@ -404,28 +426,6 @@ class InputParser:
         
         return positions
     
-    def _find_data_start_bod(self, df: pd.DataFrame) -> int:
-        """Find where data starts in BOD format"""
-        for i in range(min(100, len(df))):
-            if len(df.iloc[i]) < 15:  # Changed from 16 to 15
-                continue
-            
-            col5_val = str(df.iloc[i, 4]).strip() if pd.notna(df.iloc[i, 4]) else ""
-            if any(word in col5_val.lower() for word in ['strike', 'price', 'column', 'header']):
-                continue
-            
-            try:
-                if pd.notna(df.iloc[i, 4]):
-                    float(df.iloc[i, 4])
-                # Check columns 13 and 14 instead of column 15
-                if pd.notna(df.iloc[i, 13]) or pd.notna(df.iloc[i, 14]):
-                    float(df.iloc[i, 13] if pd.notna(df.iloc[i, 13]) else 0)
-                    float(df.iloc[i, 14] if pd.notna(df.iloc[i, 14]) else 0)
-                return i
-            except:
-                continue
-        return 0
-    
     def _parse_contract_id(self, contract_id: str) -> Optional[Dict]:
         """Parse contract ID string - handles both stock and index contracts"""
         try:
@@ -515,7 +515,7 @@ class InputParser:
             return None
         
         bloomberg_ticker = self._generate_bloomberg_ticker(
-            mapping['ticker'], expiry, security_type, strike
+            mapping['ticker'], symbol, expiry, security_type, strike
         )
         
         # Handle lot_size: Use provided value, or mapping value, or 1 if both are None/blank
@@ -539,14 +539,31 @@ class InputParser:
             lot_size=final_lot_size
         )
     
-    def _generate_bloomberg_ticker(self, ticker: str, expiry: datetime,
+    def _generate_bloomberg_ticker(self, ticker: str, symbol: str, expiry: datetime,
                                   security_type: str, strike: float) -> str:
-        """Generate Bloomberg ticker"""
-        # Check if this is an index ticker (ends with Index or contains specific index names)
+        """Generate Bloomberg ticker with hardcoded MIDCPNIFTY mappings"""
+        
+        # Check if this is MIDCPNIFTY based on symbol or ticker
+        symbol_upper = symbol.upper() if symbol else ''
         ticker_upper = ticker.upper()
-        is_index = (ticker_upper in ['NZ', 'NBZ', 'NIFTY', 'BANKNIFTY', 'NF', 'NBF', 'FNF', 'FINNIFTY', 'MCN', 'MIDCPNIFTY'] 
+        
+        # Detect if this is MIDCPNIFTY
+        is_midcap = (symbol_upper == 'MIDCPNIFTY' or 
+                    ticker_upper in ['MCN', 'MIDCPNIFTY', 'RNS', 'NMIDSELP'] or
+                    'MIDCP' in symbol_upper or 'MIDCP' in ticker_upper)
+        
+        # Override ticker for MIDCPNIFTY based on security type
+        if is_midcap:
+            if security_type == 'Futures':
+                ticker = 'RNS'  # Use RNS for MIDCPNIFTY futures
+            else:  # Call or Put
+                ticker = 'NMIDSELP'  # Use NMIDSELP for MIDCPNIFTY options
+        
+        # Check if this is an index ticker
+        is_index = (ticker_upper in ['NZ', 'NBZ', 'NIFTY', 'BANKNIFTY', 'NF', 'NBF', 'FNF', 'FINNIFTY', 'RNS', 'NMIDSELP'] 
                    or 'NIFTY' in ticker_upper 
-                   or ticker_upper.endswith('INDEX'))
+                   or ticker_upper.endswith('INDEX')
+                   or is_midcap)
         
         if security_type == 'Futures':
             month_code = MONTH_CODE.get(expiry.month, "")
